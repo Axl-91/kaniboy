@@ -1,5 +1,7 @@
 use pixels::{Pixels, ScalingMode, SurfaceTexture};
-use std::time::Instant;
+use std::fs;
+use std::path::PathBuf;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use std::{sync::Arc, time::Duration};
 use winit::event::{ElementState, KeyEvent};
 use winit::event_loop::ControlFlow;
@@ -45,6 +47,7 @@ const FRAME_CYCLES: u32 = 70_224;
 const EMULATION_CHUNK_CYCLES: u32 = 256;
 
 const SKIN_BYTES: &[u8] = include_bytes!("../../assets/gameboy_layout.png");
+const SCREENSHOT_DIR: &str = "screenshots";
 
 fn draw_skin(pixels: &mut Pixels<'static>) {
     let skin = image::load_from_memory_with_format(SKIN_BYTES, image::ImageFormat::Png)
@@ -172,15 +175,50 @@ impl Frontend {
             window.set_cursor_visible(false);
         }
     }
+
+    /// Saves the whole window buffer (skin and LCD) as a PNG.
+    fn save_screenshot(&self) {
+        let Some(pixels) = &self.pixels else {
+            return;
+        };
+
+        if let Err(error) = fs::create_dir_all(SCREENSHOT_DIR) {
+            log::error!("Cannot create {SCREENSHOT_DIR}/: {error}");
+            return;
+        }
+
+        let seconds = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_secs());
+        let name: String = self
+            .emulator
+            .get_title()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+            .collect();
+        let path = PathBuf::from(SCREENSHOT_DIR).join(format!("{name}_{seconds}.png"));
+
+        match image::save_buffer(
+            &path,
+            pixels.frame(),
+            WINDOW_WIDTH,
+            WINDOW_HEIGHT,
+            image::ColorType::Rgba8,
+        ) {
+            Ok(()) => eprintln!("Screenshot saved to {}", path.display()),
+            Err(error) => log::error!("Failed to save screenshot: {error}"),
+        }
+    }
 }
 
 impl ApplicationHandler for Frontend {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        let game_title = self.emulator.get_title();
         let window = Arc::new(
             event_loop
                 .create_window(
                     Window::default_attributes()
-                        .with_title("KaniBoy")
+                        .with_title(format!("KaniBoy - {game_title}"))
                         .with_name("kaniboy", "kaniboy")
                         .with_inner_size(winit::dpi::LogicalSize::new(WINDOW_WIDTH, WINDOW_HEIGHT)),
                 )
@@ -251,7 +289,11 @@ impl ApplicationHandler for Frontend {
             WindowEvent::RedrawRequested => {
                 if let Some(pixels) = &mut self.pixels {
                     update_framebuffer(&self.emulator, pixels);
-                    pixels.render().unwrap();
+
+                    if let Err(error) = pixels.render() {
+                        log::error!("Rendering failed: {error}");
+                        event_loop.exit(); // `exiting` runs, so the cartridge RAM is saved
+                    }
                 }
             }
             WindowEvent::Resized(size) => {
@@ -277,6 +319,11 @@ impl ApplicationHandler for Frontend {
             } => {
                 if key == KeyCode::F11 && state == ElementState::Pressed && !repeat {
                     self.toggle_fullscreen();
+                    return;
+                }
+
+                if key == KeyCode::F12 && state == ElementState::Pressed && !repeat {
+                    self.save_screenshot();
                     return;
                 }
 

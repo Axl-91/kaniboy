@@ -37,13 +37,6 @@ use crate::memory::map::{
 const RAM_SIZE_CODE_ADDRESS: usize = 0x0149;
 const CARTRIDGE_TYPE_ADDRESS: usize = 0x0147;
 
-/// Represents a Game Boy cartridge with ROM, RAM, and a memory bank controller.
-pub struct Cartridge {
-    rom: Vec<u8>,
-    mbc: CartridgeMbc,
-    path: Option<PathBuf>,
-}
-
 fn unsupported_type(mbc_type: u8) -> io::Error {
     io::Error::new(
         io::ErrorKind::InvalidData,
@@ -51,54 +44,68 @@ fn unsupported_type(mbc_type: u8) -> io::Error {
     )
 }
 
+fn select_mbc(mbc_type: u8, ram_size: usize) -> io::Result<CartridgeMbc> {
+    match mbc_type {
+        // ROM-only cartridges don't have an MBC, but we can reuse the MBC1
+        // implementation because no banking writes are performed.
+        ROM_ONLY => Ok(create_mbc1(false, ram_size)),
+
+        MBC1_BATTERY => Ok(create_mbc1(true, ram_size)),
+        MBC1_SIMPLE_START..=MBC1_SIMPLE_END => Ok(create_mbc1(false, ram_size)),
+
+        MBC2_BATTERY => Ok(create_mbc2(true)),
+        MBC2_SIMPLE => Ok(create_mbc2(false)),
+
+        MBC3_BATTERY => Ok(create_mbc3(true, ram_size)),
+        MBC3_SIMPLE_START..=MBC3_SIMPLE_END => Ok(create_mbc3(false, ram_size)),
+
+        MBC5_BATTERY => Ok(create_mbc5(true, ram_size)),
+        MBC5_START..=MBC5_END => Ok(create_mbc5(false, ram_size)),
+
+        _ => Err(unsupported_type(mbc_type)),
+    }
+}
+
+fn select_ram_size(ram_type: u8) -> usize {
+    match ram_type {
+        0x00 => 0,
+        0x01 => RAM_BANK_SIZE / 4,
+        0x02 => RAM_BANK_SIZE,
+        0x03 => RAM_BANK_SIZE * 4,
+        0x04 => RAM_BANK_SIZE * 16,
+        0x05 => RAM_BANK_SIZE * 8,
+        _ => 0,
+    }
+}
+
+/// Represents a Game Boy cartridge with ROM, RAM, and a memory bank controller.
+pub struct Cartridge {
+    title: String,
+    rom: Vec<u8>,
+    mbc: CartridgeMbc,
+    path: Option<PathBuf>,
+}
+
 impl Cartridge {
     /// Creates a new cartridge with the given ROM and RAM size.
     pub fn new(rom: Vec<u8>, mbc: CartridgeMbc) -> Self {
         Self {
+            title: "UNTITLED".to_owned(),
             rom,
             mbc,
             path: None,
         }
     }
 
-    fn select_mbc(mbc_type: u8, ram_size: usize) -> io::Result<CartridgeMbc> {
-        match mbc_type {
-            // ROM-only cartridges don't have an MBC, but we can reuse the MBC1
-            // implementation because no banking writes are performed.
-            ROM_ONLY => Ok(create_mbc1(false, ram_size)),
-
-            MBC1_BATTERY => Ok(create_mbc1(true, ram_size)),
-            MBC1_SIMPLE_START..=MBC1_SIMPLE_END => Ok(create_mbc1(false, ram_size)),
-
-            MBC2_BATTERY => Ok(create_mbc2(true)),
-            MBC2_SIMPLE => Ok(create_mbc2(false)),
-
-            MBC3_BATTERY => Ok(create_mbc3(true, ram_size)),
-            MBC3_SIMPLE_START..=MBC3_SIMPLE_END => Ok(create_mbc3(false, ram_size)),
-
-            MBC5_BATTERY => Ok(create_mbc5(true, ram_size)),
-            MBC5_START..=MBC5_END => Ok(create_mbc5(false, ram_size)),
-
-            _ => Err(unsupported_type(mbc_type)),
-        }
-    }
-
-    fn select_ram_size(ram_type: u8) -> usize {
-        match ram_type {
-            0x00 => 0,
-            0x01 => RAM_BANK_SIZE / 4,
-            0x02 => RAM_BANK_SIZE,
-            0x03 => RAM_BANK_SIZE * 4,
-            0x04 => RAM_BANK_SIZE * 16,
-            0x05 => RAM_BANK_SIZE * 8,
-            _ => 0,
-        }
+    pub(super) fn get_title(&self) -> String {
+        self.title.clone()
     }
 
     /// Loads a cartridge ROM from the given file path
     /// and initializes its RAM from the cartridge header.
     pub fn from_file<P: AsRef<Path>>(path: P) -> io::Result<Self> {
         let path = path.as_ref();
+        let mut title = "UNTITLED".to_owned();
         let rom = fs::read(path)?;
 
         if rom.len() <= RAM_SIZE_CODE_ADDRESS {
@@ -109,13 +116,15 @@ impl Cartridge {
         }
 
         if let Some(info) = CartridgeInfo::parse(&rom) {
-            println!("{info}")
+            println!("{info}");
+            title = info.title().to_owned();
         }
 
-        let ram_size = Self::select_ram_size(rom[RAM_SIZE_CODE_ADDRESS]);
-        let mbc = Self::select_mbc(rom[CARTRIDGE_TYPE_ADDRESS], ram_size)?;
+        let ram_size = select_ram_size(rom[RAM_SIZE_CODE_ADDRESS]);
+        let mbc = select_mbc(rom[CARTRIDGE_TYPE_ADDRESS], ram_size)?;
 
         let mut cartridge = Self {
+            title,
             rom,
             mbc,
             path: Some(path.to_path_buf()),
@@ -408,7 +417,7 @@ mod tests {
 
             for (code, expected_size) in ram_size_codes {
                 assert_eq!(
-                    Cartridge::select_ram_size(code),
+                    select_ram_size(code),
                     expected_size,
                     "Unexpected RAM size for header code {code:#04X}"
                 );

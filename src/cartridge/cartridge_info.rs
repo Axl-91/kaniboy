@@ -20,6 +20,10 @@ pub struct CartridgeInfo {
 }
 
 impl CartridgeInfo {
+    pub fn title(&self) -> &str {
+        &self.title
+    }
+
     /// Parses the header. Returns `None` if the ROM is too small to have one.
     pub fn parse(rom: &[u8]) -> Option<Self> {
         if rom.len() <= HEADER_END {
