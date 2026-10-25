@@ -92,6 +92,10 @@ impl MemoryBus {
         self.boot_rom.as_ref().is_some_and(BootRom::is_enabled)
     }
 
+    pub fn get_title(&self) -> String {
+        self.cartridge.get_title()
+    }
+
     pub fn get_framebuffer(&self) -> &[u8] {
         self.ppu.get_framebuffer()
     }

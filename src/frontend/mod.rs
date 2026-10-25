@@ -1,10 +1,14 @@
-use pixels::{Pixels, SurfaceTexture};
-use std::time::Instant;
+use pixels::{Pixels, ScalingMode, SurfaceTexture};
+use std::fs;
+use std::path::PathBuf;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use std::{sync::Arc, time::Duration};
+use winit::error::{EventLoopError, OsError};
 use winit::event::{ElementState, KeyEvent};
 use winit::event_loop::ControlFlow;
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::platform::wayland::WindowAttributesExtWayland;
+use winit::window::Fullscreen;
 use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
@@ -44,6 +48,7 @@ const FRAME_CYCLES: u32 = 70_224;
 const EMULATION_CHUNK_CYCLES: u32 = 256;
 
 const SKIN_BYTES: &[u8] = include_bytes!("../../assets/gameboy_layout.png");
+const SCREENSHOT_DIR: &str = "screenshots";
 
 fn draw_skin(pixels: &mut Pixels<'static>) {
     let skin = image::load_from_memory_with_format(SKIN_BYTES, image::ImageFormat::Png)
@@ -156,24 +161,92 @@ impl Frontend {
             next_frame: Instant::now(),
         }
     }
+
+    /// Switches between windowed and borderless fullscreen.
+    fn toggle_fullscreen(&self) {
+        let Some(window) = &self.window else {
+            return;
+        };
+
+        if window.fullscreen().is_some() {
+            window.set_fullscreen(None);
+            window.set_cursor_visible(true);
+        } else {
+            window.set_fullscreen(Some(Fullscreen::Borderless(None)));
+            window.set_cursor_visible(false);
+        }
+    }
+
+    /// Saves the whole window buffer (skin and LCD) as a PNG.
+    fn save_screenshot(&self) {
+        let Some(pixels) = &self.pixels else {
+            return;
+        };
+
+        if let Err(error) = fs::create_dir_all(SCREENSHOT_DIR) {
+            log::error!("Cannot create {SCREENSHOT_DIR}/: {error}");
+            return;
+        }
+
+        let seconds = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_secs());
+        let name: String = self
+            .emulator
+            .get_title()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+            .collect();
+        let path = PathBuf::from(SCREENSHOT_DIR).join(format!("{name}_{seconds}.png"));
+
+        match image::save_buffer(
+            &path,
+            pixels.frame(),
+            WINDOW_WIDTH,
+            WINDOW_HEIGHT,
+            image::ColorType::Rgba8,
+        ) {
+            Ok(()) => eprintln!("Screenshot saved to {}", path.display()),
+            Err(error) => log::error!("Failed to save screenshot: {error}"),
+        }
+    }
+
+    fn create_window(&self, event_loop: &ActiveEventLoop) -> Result<Window, OsError> {
+        let game_title = self.emulator.get_title();
+
+        event_loop.create_window(
+            Window::default_attributes()
+                .with_title(format!("KaniBoy - {game_title}"))
+                .with_name("kaniboy", "kaniboy")
+                .with_inner_size(winit::dpi::LogicalSize::new(WINDOW_WIDTH, WINDOW_HEIGHT)),
+        )
+    }
 }
 
 impl ApplicationHandler for Frontend {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        let window = Arc::new(
-            event_loop
-                .create_window(
-                    Window::default_attributes()
-                        .with_title("KaniBoy")
-                        .with_name("kaniboy", "kaniboy")
-                        .with_inner_size(winit::dpi::LogicalSize::new(WINDOW_WIDTH, WINDOW_HEIGHT)),
-                )
-                .unwrap(),
-        );
+        let window = match self.create_window(event_loop) {
+            Ok(window) => Arc::new(window),
+            Err(error) => {
+                log::error!("Failed to create window: {error}");
+                event_loop.exit();
+                return;
+            }
+        };
 
         let size = window.inner_size();
         let surface_texture = SurfaceTexture::new(size.width, size.height, window.clone());
-        let mut pixels = Pixels::new(WINDOW_WIDTH, WINDOW_HEIGHT, surface_texture).unwrap();
+
+        let mut pixels = match Pixels::new(WINDOW_WIDTH, WINDOW_HEIGHT, surface_texture) {
+            Ok(pixels) => pixels,
+            Err(error) => {
+                log::error!("Failed to initialize graphics: {error}");
+                event_loop.exit();
+                return;
+            }
+        };
+        pixels.set_scaling_mode(ScalingMode::Fill);
+        pixels.clear_color(pixels::wgpu::Color::BLACK); // letterbox color, explicit
 
         draw_skin(&mut pixels);
 
@@ -232,7 +305,22 @@ impl ApplicationHandler for Frontend {
             WindowEvent::RedrawRequested => {
                 if let Some(pixels) = &mut self.pixels {
                     update_framebuffer(&self.emulator, pixels);
-                    pixels.render().unwrap();
+
+                    if let Err(error) = pixels.render() {
+                        log::error!("Rendering failed: {error}");
+                        event_loop.exit(); // `exiting` runs, so the cartridge RAM is saved
+                    }
+                }
+            }
+            WindowEvent::Resized(size) => {
+                // A minimized window reports 0x0 on some platforms; ignore it.
+                if size.width > 0
+                    && size.height > 0
+                    && let Some(pixels) = &mut self.pixels
+                    && let Err(err) = pixels.resize_surface(size.width, size.height)
+                {
+                    eprintln!("resize failed: {err}");
+                    event_loop.exit();
                 }
             }
             WindowEvent::KeyboardInput {
@@ -245,8 +333,21 @@ impl ApplicationHandler for Frontend {
                     },
                 ..
             } => {
+                if key == KeyCode::F11 && state == ElementState::Pressed && !repeat {
+                    self.toggle_fullscreen();
+                    return;
+                }
+
+                if key == KeyCode::F12 && state == ElementState::Pressed && !repeat {
+                    self.save_screenshot();
+                    return;
+                }
+
                 if key == KeyCode::Escape && state == ElementState::Pressed {
-                    event_loop.exit();
+                    match &self.window {
+                        Some(window) if window.fullscreen().is_some() => self.toggle_fullscreen(),
+                        _ => event_loop.exit(),
+                    }
                     return;
                 };
 
@@ -269,9 +370,11 @@ impl ApplicationHandler for Frontend {
     }
 }
 
-pub fn run(emulator: Emulator) {
-    let event_loop = EventLoop::new().unwrap();
+pub fn run(emulator: Emulator) -> Result<(), EventLoopError> {
+    let event_loop = EventLoop::new()?;
     let mut frontend = Frontend::new(emulator);
 
-    event_loop.run_app(&mut frontend).unwrap();
+    event_loop.run_app(&mut frontend)?;
+
+    Ok(())
 }

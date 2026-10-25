@@ -52,13 +52,15 @@ Hardware components are responsible for their own internal state and timing, whi
 | `K` | B |
 | `Enter` | Start |
 | `Left Shift` | Select |
+| `F11` | Fullscreen Mode |
+| `F12` | Take screenshot |
 | `Esc` | Quit |
 
 ## Running
 
 ### Run the emulator
 
-To run the emulator with a Game Boy ROM, without a boot ROM:
+To run the emulator with a Game Boy ROM, provide its path:
 
 ```bash
 just run-release <PATH_TO_ROM>
@@ -69,6 +71,8 @@ For example:
 ```bash
 just run-release ./roms/tetris.gb
 ```
+
+If no ROM path is provided, a file picker will open to let you select a Game Boy ROM.
 
 To run the emulator with a boot ROM, use the `run-boot` recipe, providing the boot ROM path first and the game ROM path second:
 
@@ -82,7 +86,7 @@ For example, using the Bootix DMG boot ROM included in the repository:
 just run-boot ./bootrom/bootix_dmg.bin ./roms/tetris.gb
 ```
 
-The boot ROM is optional. When running without one, the emulator starts directly from the post-boot state.
+Both the game ROM and the boot ROM are optional. When running without a boot ROM, the emulator starts directly from the post-boot state.
 
 ### Run the tests
 
