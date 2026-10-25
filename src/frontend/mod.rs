@@ -3,6 +3,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use std::{sync::Arc, time::Duration};
+use winit::error::{EventLoopError, OsError};
 use winit::event::{ElementState, KeyEvent};
 use winit::event_loop::ControlFlow;
 use winit::keyboard::{KeyCode, PhysicalKey};
@@ -209,26 +210,41 @@ impl Frontend {
             Err(error) => log::error!("Failed to save screenshot: {error}"),
         }
     }
+
+    fn create_window(&self, event_loop: &ActiveEventLoop) -> Result<Window, OsError> {
+        let game_title = self.emulator.get_title();
+
+        event_loop.create_window(
+            Window::default_attributes()
+                .with_title(format!("KaniBoy - {game_title}"))
+                .with_name("kaniboy", "kaniboy")
+                .with_inner_size(winit::dpi::LogicalSize::new(WINDOW_WIDTH, WINDOW_HEIGHT)),
+        )
+    }
 }
 
 impl ApplicationHandler for Frontend {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        let game_title = self.emulator.get_title();
-        let window = Arc::new(
-            event_loop
-                .create_window(
-                    Window::default_attributes()
-                        .with_title(format!("KaniBoy - {game_title}"))
-                        .with_name("kaniboy", "kaniboy")
-                        .with_inner_size(winit::dpi::LogicalSize::new(WINDOW_WIDTH, WINDOW_HEIGHT)),
-                )
-                .unwrap(),
-        );
+        let window = match self.create_window(event_loop) {
+            Ok(window) => Arc::new(window),
+            Err(error) => {
+                log::error!("Failed to create window: {error}");
+                event_loop.exit();
+                return;
+            }
+        };
 
         let size = window.inner_size();
         let surface_texture = SurfaceTexture::new(size.width, size.height, window.clone());
 
-        let mut pixels = Pixels::new(WINDOW_WIDTH, WINDOW_HEIGHT, surface_texture).unwrap();
+        let mut pixels = match Pixels::new(WINDOW_WIDTH, WINDOW_HEIGHT, surface_texture) {
+            Ok(pixels) => pixels,
+            Err(error) => {
+                log::error!("Failed to initialize graphics: {error}");
+                event_loop.exit();
+                return;
+            }
+        };
         pixels.set_scaling_mode(ScalingMode::Fill);
         pixels.clear_color(pixels::wgpu::Color::BLACK); // letterbox color, explicit
 
@@ -354,9 +370,11 @@ impl ApplicationHandler for Frontend {
     }
 }
 
-pub fn run(emulator: Emulator) {
-    let event_loop = EventLoop::new().unwrap();
+pub fn run(emulator: Emulator) -> Result<(), EventLoopError> {
+    let event_loop = EventLoop::new()?;
     let mut frontend = Frontend::new(emulator);
 
-    event_loop.run_app(&mut frontend).unwrap();
+    event_loop.run_app(&mut frontend)?;
+
+    Ok(())
 }

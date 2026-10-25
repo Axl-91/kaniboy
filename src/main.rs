@@ -72,7 +72,7 @@ fn main() -> io::Result<()> {
 
     info!("Main emulator started");
 
-    frontend::run(emulator);
+    frontend::run(emulator).map_err(io::Error::other)?;
 
     Ok(())
 }
