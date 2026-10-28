@@ -28,6 +28,7 @@ use crate::memory::map::MBC3_SIMPLE_END;
 use crate::memory::map::MBC3_SIMPLE_START;
 use crate::memory::map::MBC5_BATTERY;
 use crate::memory::map::MBC5_END;
+use crate::memory::map::MBC5_RUMBLE_BATTERY;
 use crate::memory::map::MBC5_START;
 use crate::memory::map::{
     CARTRIDGE_RAM_END, CARTRIDGE_RAM_START, CARTRIDGE_ROM_END, CARTRIDGE_ROM_START,
@@ -59,7 +60,7 @@ fn select_mbc(mbc_type: u8, ram_size: usize) -> io::Result<CartridgeMbc> {
         MBC3_BATTERY => Ok(create_mbc3(true, ram_size)),
         MBC3_SIMPLE_START..=MBC3_SIMPLE_END => Ok(create_mbc3(false, ram_size)),
 
-        MBC5_BATTERY => Ok(create_mbc5(true, ram_size)),
+        MBC5_BATTERY | MBC5_RUMBLE_BATTERY => Ok(create_mbc5(true, ram_size)),
         MBC5_START..=MBC5_END => Ok(create_mbc5(false, ram_size)),
 
         _ => Err(unsupported_type(mbc_type)),

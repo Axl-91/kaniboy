@@ -26,7 +26,8 @@ pub const MBC3_BATTERY: u8 = 0x13;
 
 pub const MBC5_START: u8 = 0x19;
 pub const MBC5_END: u8 = 0x1D;
-pub const MBC5_BATTERY: u8 = 0x1B | 0x1E;
+pub const MBC5_BATTERY: u8 = 0x1B;
+pub const MBC5_RUMBLE_BATTERY: u8 = 0x1E;
 
 // ADDRESSES
 pub const CARTRIDGE_ROM_START: u16 = 0x0000;
